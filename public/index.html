@@ -3,27 +3,90 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Clawbot — FEC Data</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 700px; margin: 2rem auto; padding: 0 1rem; }
-    h1 { margin-bottom: 0.5rem; }
-    p { color: #555; }
-    ul { line-height: 2; }
-    a { color: #0066cc; }
-    code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
-  </style>
+  <title>Clawbot — FEC District Dashboard</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
-  <h1>Clawbot FEC Data</h1>
-  <p>Processed FEC bulk data filtered to monitored congressional districts.</p>
-  <h2>Data Files</h2>
-  <ul>
-    <li><a href="data/district_summary.csv">district_summary.csv</a> — per-district totals (raised, spent, net)</li>
-    <li><a href="data/candidates.csv">candidates.csv</a> — candidate details</li>
-    <li><a href="data/committees.csv">committees.csv</a> — committee details</li>
-    <li><a href="data/individual_contributions.csv">individual_contributions.csv</a> — itemised individual donations</li>
-    <li><a href="data/pac_contributions.csv">pac_contributions.csv</a> — PAC / committee-to-committee donations</li>
-    <li><a href="data/expenditures.csv">expenditures.csv</a> — operating expenditures</li>
-  </ul>
+  <header>
+    <h1>Clawbot — FEC District Dashboard</h1>
+    <p id="subtitle">Processed FEC bulk data filtered to monitored congressional districts.</p>
+  </header>
+
+  <main>
+    <!-- Summary cards -->
+    <section id="summary-cards" class="cards">
+      <div class="card">
+        <span class="card-label">Districts Tracked</span>
+        <span class="card-value" id="card-districts">—</span>
+      </div>
+      <div class="card">
+        <span class="card-label">Total Individual Donations</span>
+        <span class="card-value" id="card-indiv-count">—</span>
+      </div>
+      <div class="card">
+        <span class="card-label">Total Raised</span>
+        <span class="card-value" id="card-raised">—</span>
+      </div>
+      <div class="card">
+        <span class="card-label">Total Spent</span>
+        <span class="card-value" id="card-spent">—</span>
+      </div>
+    </section>
+
+    <!-- Charts -->
+    <section class="chart-row">
+      <div class="chart-container">
+        <h2>Fundraising by District</h2>
+        <canvas id="raisedChart"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2>Spending vs. Fundraising</h2>
+        <canvas id="spendChart"></canvas>
+      </div>
+    </section>
+
+    <!-- District summary table -->
+    <section>
+      <h2>District Summary</h2>
+      <div class="table-wrap">
+        <table id="summary-table">
+          <thead>
+            <tr>
+              <th data-col="district">District</th>
+              <th data-col="individual_donation_count">Indiv. #</th>
+              <th data-col="individual_donation_total">Indiv. $</th>
+              <th data-col="pac_donation_count">PAC #</th>
+              <th data-col="pac_donation_total">PAC $</th>
+              <th data-col="expenditure_count">Exp. #</th>
+              <th data-col="expenditure_total">Exp. $</th>
+              <th data-col="total_raised">Total Raised</th>
+              <th data-col="net_cash_flow">Net Cash</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Download links -->
+    <section id="downloads">
+      <h2>Download Raw CSV Data</h2>
+      <div class="download-grid">
+        <a href="data/district_summary.csv" class="dl-link">District Summary</a>
+        <a href="data/individual_contributions.csv" class="dl-link">Individual Contributions</a>
+        <a href="data/pac_contributions.csv" class="dl-link">PAC Contributions</a>
+        <a href="data/expenditures.csv" class="dl-link">Expenditures</a>
+        <a href="data/candidates.csv" class="dl-link">Candidates</a>
+        <a href="data/committees.csv" class="dl-link">Committees</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Data sourced from the <a href="https://www.fec.gov/data/browse-data/?tab=bulk-data">FEC Bulk Data</a>.</p>
+  </footer>
+
+  <script src="js/dashboard.js"></script>
 </body>
 </html>

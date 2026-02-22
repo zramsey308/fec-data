@@ -1,0 +1,4 @@
+# Allow any dashboard on any domain to fetch the CSV data
+/data/*
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=3600
