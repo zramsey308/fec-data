@@ -1,8 +1,4 @@
-# Clawbot — FEC data ingestion pipeline
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-sqlalchemy>=2.0
-psycopg2-binary>=2.9
+# Clawbot — FEC data ingestion + static dashboard builder
 google-api-python-client>=2.100.0
 google-auth>=2.23.0
 python-dotenv>=1.0.0

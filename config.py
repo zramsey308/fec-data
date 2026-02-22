@@ -3,27 +3,27 @@ Clawbot configuration — all secrets loaded from environment variables.
 """
 import os
 
-
-# --- Database (Supabase PostgreSQL) ---
-DATABASE_URL: str = os.environ.get(
-    "DATABASE_URL",
-    "postgresql+psycopg2://user:pass@localhost:5432/clawbot",
-)
-
 # --- Google Drive ---
-# Service-account JSON key path *or* OAuth token — never committed.
+# Service-account JSON key path — never committed.
 GOOGLE_SERVICE_ACCOUNT_FILE: str = os.environ.get(
     "GOOGLE_SERVICE_ACCOUNT_FILE", ""
 )
-# Folder ID that contains the indivYY.zip bulk files
+# Service-account JSON as a raw string (preferred on Render).
+# Set this env var with the full contents of your service-account.json file.
+GOOGLE_SERVICE_ACCOUNT_JSON: str = os.environ.get(
+    "GOOGLE_SERVICE_ACCOUNT_JSON", ""
+)
+# Folder ID that contains the FEC bulk files
 GOOGLE_DRIVE_FOLDER_ID: str = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "")
 
 # --- FEC processing ---
-# Chunk size for streaming CSV reads (number of lines per batch)
 CHUNK_SIZE: int = int(os.environ.get("FEC_CHUNK_SIZE", "50000"))
-
-# Election cycle to process (e.g. 2024)
 DEFAULT_CYCLE: int = int(os.environ.get("FEC_CYCLE", "2024"))
+
+# --- Output ---
+# Build output directory for the static site
+OUTPUT_DIR: str = os.environ.get("OUTPUT_DIR", "public/data")
+RAW_DATA_DIR: str = os.environ.get("RAW_DATA_DIR", "raw_data")
 
 # --- Monitored districts ---
 MONITORED_DISTRICTS: list[str] = [

@@ -1,130 +1,295 @@
 """
 Memory-safe FEC bulk-file streaming.
 
-The indivYY.zip files from the FEC contain a single pipe-delimited text file
-(e.g. itcont.txt) with *no header row*.  Column positions are fixed per the
-FEC bulk-data spec.
+Parses the FEC bulk download ZIP files line-by-line so memory stays flat
+regardless of file size.  Each parser yields dicts with named fields.
 
-This module:
-  1. Opens a ZIP from a local path (already downloaded via services/drive).
-  2. Iterates the inner text file line-by-line — never loads the full file.
-  3. Extracts only the three columns we need.
-  4. Yields typed dicts in configurable chunk sizes.
+Supported file types:
+  - indivYY.zip  → individual contributions  (itcont.txt)
+  - pasYY.zip    → PAC / committee-to-committee contributions (itpas2.txt)
+  - oppexpYY.zip → operating expenditures / disbursements (oppexp.txt)
+  - cnYY.zip     → candidate master (cn.txt)
+  - cmYY.zip     → committee master (cm.txt)
+  - ccnYY.zip    → candidate-committee linkage (ccl.txt)
+
+Column positions follow the FEC bulk-data spec:
+https://www.fec.gov/campaign-finance-data/contributions-individuals-file-description/
 """
 from __future__ import annotations
 
-import csv
 import io
 import logging
 import zipfile
 from decimal import Decimal, InvalidOperation
-from typing import Iterator, TypedDict
+from typing import Iterator
 
 import config
 
 logger = logging.getLogger(__name__)
 
-# ── FEC individual-contributions column positions (0-indexed) ──
-# Full spec: https://www.fec.gov/campaign-finance-data/contributions-individuals-file-description/
-COL_CMTE_ID = 0
-COL_ENTITY_TP = 6
-COL_TRANSACTION_AMT = 14
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _open_txt_in_zip(zip_path: str):
+    """Open the first .txt file inside a ZIP and return a text stream."""
+    zf = zipfile.ZipFile(zip_path, "r")
+    names = zf.namelist()
+    txt_name = next((n for n in names if n.lower().endswith(".txt")), names[0])
+    logger.info("Streaming %s from %s", txt_name, zip_path)
+    raw = zf.open(txt_name)
+    text_stream = io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
+    return zf, text_stream
 
 
-class ContributionRow(TypedDict):
-    cmte_id: str
-    transaction_amt: Decimal
-
-
-def _parse_line(line: str) -> ContributionRow | None:
-    """
-    Parse a single pipe-delimited line and return the fields we need,
-    or None if the line is malformed / amount is unparseable.
-    """
-    parts = line.split("|")
-    if len(parts) <= COL_TRANSACTION_AMT:
+def _safe_decimal(raw: str) -> Decimal | None:
+    raw = raw.strip()
+    if not raw:
         return None
-
-    cmte_id = parts[COL_CMTE_ID].strip()
-    raw_amt = parts[COL_TRANSACTION_AMT].strip()
-
-    if not cmte_id or not raw_amt:
-        return None
-
     try:
-        amt = Decimal(raw_amt)
+        return Decimal(raw)
     except (InvalidOperation, ValueError):
         return None
 
-    return ContributionRow(cmte_id=cmte_id, transaction_amt=amt)
+
+def _clean(val: str) -> str:
+    return val.strip()
 
 
-def stream_contributions(
+# ---------------------------------------------------------------------------
+# Individual contributions  (indivYY.zip → itcont.txt)
+# ---------------------------------------------------------------------------
+# Columns: CMTE_ID|AMNDT_IND|RPT_TP|TRANSACTION_PGI|IMAGE_NUM|TRANSACTION_TP|
+#           ENTITY_TP|NAME|CITY|STATE|ZIP_CODE|EMPLOYER|OCCUPATION|
+#           TRANSACTION_DT|TRANSACTION_AMT|OTHER_ID|TRAN_ID|FILE_NUM|
+#           MEMO_CD|MEMO_TEXT|SUB_ID
+
+def stream_individual_contributions(
     zip_path: str,
     chunk_size: int | None = None,
-) -> Iterator[list[ContributionRow]]:
-    """
-    Yield chunks of parsed contribution rows from a ZIP file.
-
-    Each chunk is a list of at most *chunk_size* ContributionRow dicts.
-    Memory stays bounded regardless of file size because we read line-by-line
-    from the compressed stream and flush each chunk before accumulating the next.
-    """
+) -> Iterator[list[dict]]:
+    """Yield chunks of individual contribution rows."""
     chunk_size = chunk_size or config.CHUNK_SIZE
+    zf, text_stream = _open_txt_in_zip(zip_path)
 
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        # FEC ZIPs typically contain a single .txt file
-        names = zf.namelist()
-        txt_name = next((n for n in names if n.endswith(".txt")), names[0])
-        logger.info("Streaming %s from %s", txt_name, zip_path)
+    try:
+        chunk: list[dict] = []
+        for line in text_stream:
+            parts = line.split("|")
+            if len(parts) < 15:
+                continue
+            amt = _safe_decimal(parts[14])
+            if amt is None:
+                continue
 
-        with zf.open(txt_name) as raw:
-            text_stream = io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
-            chunk: list[ContributionRow] = []
+            chunk.append({
+                "cmte_id": _clean(parts[0]),
+                "entity_type": _clean(parts[6]),
+                "contributor_name": _clean(parts[7]),
+                "city": _clean(parts[8]),
+                "state": _clean(parts[9]),
+                "zip_code": _clean(parts[10]),
+                "employer": _clean(parts[11]),
+                "occupation": _clean(parts[12]),
+                "transaction_date": _clean(parts[13]),
+                "transaction_amt": amt,
+                "memo_text": _clean(parts[19]) if len(parts) > 19 else "",
+            })
 
-            for lineno, line in enumerate(text_stream, start=1):
-                row = _parse_line(line)
-                if row is not None:
-                    chunk.append(row)
-
-                if len(chunk) >= chunk_size:
-                    logger.debug("Yielding chunk at line %d (%d rows)", lineno, len(chunk))
-                    yield chunk
-                    chunk = []
-
-            # Flush remaining rows
-            if chunk:
+            if len(chunk) >= chunk_size:
                 yield chunk
+                chunk = []
+        if chunk:
+            yield chunk
+    finally:
+        zf.close()
 
-    logger.info("Finished streaming %s", zip_path)
+    logger.info("Finished streaming individual contributions from %s", zip_path)
 
+
+# Keep backward-compatible alias used by mapping.py
+stream_contributions = stream_individual_contributions
+
+
+# ---------------------------------------------------------------------------
+# PAC / committee-to-committee  (pasYY.zip → itpas2.txt)
+# ---------------------------------------------------------------------------
+# Same column layout as individual contributions.
+
+def stream_pac_contributions(
+    zip_path: str,
+    chunk_size: int | None = None,
+) -> Iterator[list[dict]]:
+    """Yield chunks of PAC / committee-to-committee contribution rows."""
+    chunk_size = chunk_size or config.CHUNK_SIZE
+    zf, text_stream = _open_txt_in_zip(zip_path)
+
+    try:
+        chunk: list[dict] = []
+        for line in text_stream:
+            parts = line.split("|")
+            if len(parts) < 15:
+                continue
+            amt = _safe_decimal(parts[14])
+            if amt is None:
+                continue
+
+            chunk.append({
+                "cmte_id": _clean(parts[0]),
+                "entity_type": _clean(parts[6]),
+                "contributor_name": _clean(parts[7]),
+                "city": _clean(parts[8]),
+                "state": _clean(parts[9]),
+                "zip_code": _clean(parts[10]),
+                "transaction_date": _clean(parts[13]),
+                "transaction_amt": amt,
+                "other_id": _clean(parts[15]) if len(parts) > 15 else "",
+                "memo_text": _clean(parts[19]) if len(parts) > 19 else "",
+            })
+
+            if len(chunk) >= chunk_size:
+                yield chunk
+                chunk = []
+        if chunk:
+            yield chunk
+    finally:
+        zf.close()
+
+    logger.info("Finished streaming PAC contributions from %s", zip_path)
+
+
+# ---------------------------------------------------------------------------
+# Operating expenditures  (oppexpYY.zip → oppexp.txt)
+# ---------------------------------------------------------------------------
+# Columns: CMTE_ID|AMNDT_IND|RPT_YR|RPT_TP|IMAGE_NUM|LINE_NUM|FORM_TP_CD|
+#           SCHED_TP_CD|NAME|CITY|STATE|ZIP_CODE|TRANSACTION_DT|
+#           TRANSACTION_AMT|PURPOSE|MEMO_CD|MEMO_TEXT|ENTITY_TP|...
+
+def stream_expenditures(
+    zip_path: str,
+    chunk_size: int | None = None,
+) -> Iterator[list[dict]]:
+    """Yield chunks of operating expenditure rows."""
+    chunk_size = chunk_size or config.CHUNK_SIZE
+    zf, text_stream = _open_txt_in_zip(zip_path)
+
+    try:
+        chunk: list[dict] = []
+        for line in text_stream:
+            parts = line.split("|")
+            if len(parts) < 14:
+                continue
+            amt = _safe_decimal(parts[13])
+            if amt is None:
+                continue
+
+            chunk.append({
+                "cmte_id": _clean(parts[0]),
+                "recipient_name": _clean(parts[8]),
+                "city": _clean(parts[9]),
+                "state": _clean(parts[10]),
+                "zip_code": _clean(parts[11]),
+                "transaction_date": _clean(parts[12]),
+                "transaction_amt": amt,
+                "purpose": _clean(parts[14]) if len(parts) > 14 else "",
+                "memo_text": _clean(parts[16]) if len(parts) > 16 else "",
+            })
+
+            if len(chunk) >= chunk_size:
+                yield chunk
+                chunk = []
+        if chunk:
+            yield chunk
+    finally:
+        zf.close()
+
+    logger.info("Finished streaming expenditures from %s", zip_path)
+
+
+# ---------------------------------------------------------------------------
+# Candidate master  (cnYY.zip → cn.txt)
+# ---------------------------------------------------------------------------
+# Columns: CAND_ID|CAND_NAME|CAND_PTY_AFFILIATION|CAND_ELECTION_YR|
+#           CAND_OFFICE_ST|CAND_OFFICE_DISTRICT|CAND_OFFICE|CAND_ICI|
+#           CAND_STATUS|CAND_PCC|CAND_ST1|CAND_ST2|CAND_CITY|CAND_ST|CAND_ZIP
 
 def stream_candidate_master(zip_path: str) -> Iterator[dict]:
-    """
-    Stream the candidate master file (cnYY.txt) line-by-line.
+    """Yield one dict per candidate row."""
+    zf, text_stream = _open_txt_in_zip(zip_path)
+    try:
+        for line in text_stream:
+            parts = line.split("|")
+            if len(parts) < 10:
+                continue
+            yield {
+                "cand_id": _clean(parts[0]),
+                "cand_name": _clean(parts[1]),
+                "cand_party": _clean(parts[2]),
+                "cand_election_yr": _clean(parts[3]),
+                "cand_office_st": _clean(parts[4]),
+                "cand_office_district": _clean(parts[5]),
+                "cand_office": _clean(parts[6]),
+                "cand_ici": _clean(parts[7]),
+                "cand_status": _clean(parts[8]),
+                "cand_pcc": _clean(parts[9]),
+            }
+    finally:
+        zf.close()
 
-    Yields dicts with keys: cand_id, cand_office_st, cand_office_district,
-    cand_pcc (principal campaign committee ID).
 
-    Column positions per FEC spec:
-      0  CAND_ID
-      4  CAND_OFFICE_ST
-      5  CAND_OFFICE_DISTRICT
-      9  CAND_PCC
-    """
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        names = zf.namelist()
-        txt_name = next((n for n in names if n.endswith(".txt")), names[0])
+# ---------------------------------------------------------------------------
+# Committee master  (cmYY.zip → cm.txt)
+# ---------------------------------------------------------------------------
+# Columns: CMTE_ID|CMTE_NM|TRES_NM|CMTE_ST1|CMTE_ST2|CMTE_CITY|CMTE_ST|
+#           CMTE_ZIP|CMTE_DSGN|CMTE_TP|CMTE_PTY_AFFILIATION|
+#           CMTE_FILING_FREQ|ORG_TP|CONNECTED_ORG_NM|CAND_ID
 
-        with zf.open(txt_name) as raw:
-            text_stream = io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
-            for line in text_stream:
-                parts = line.split("|")
-                if len(parts) < 10:
-                    continue
-                yield {
-                    "cand_id": parts[0].strip(),
-                    "cand_office_st": parts[4].strip(),
-                    "cand_office_district": parts[5].strip(),
-                    "cand_pcc": parts[9].strip(),
-                }
+def stream_committee_master(zip_path: str) -> Iterator[dict]:
+    """Yield one dict per committee row."""
+    zf, text_stream = _open_txt_in_zip(zip_path)
+    try:
+        for line in text_stream:
+            parts = line.split("|")
+            if len(parts) < 11:
+                continue
+            yield {
+                "cmte_id": _clean(parts[0]),
+                "cmte_name": _clean(parts[1]),
+                "treasurer_name": _clean(parts[2]),
+                "city": _clean(parts[5]) if len(parts) > 5 else "",
+                "state": _clean(parts[6]) if len(parts) > 6 else "",
+                "zip_code": _clean(parts[7]) if len(parts) > 7 else "",
+                "designation": _clean(parts[8]) if len(parts) > 8 else "",
+                "cmte_type": _clean(parts[9]) if len(parts) > 9 else "",
+                "party": _clean(parts[10]) if len(parts) > 10 else "",
+                "connected_org": _clean(parts[13]) if len(parts) > 13 else "",
+                "cand_id": _clean(parts[14]) if len(parts) > 14 else "",
+            }
+    finally:
+        zf.close()
+
+
+# ---------------------------------------------------------------------------
+# Candidate-committee linkage  (ccnYY.zip → ccl.txt)
+# ---------------------------------------------------------------------------
+# Columns: CAND_ID|CAND_ELECTION_YR|FEC_ELECTION_YR|CMTE_ID|CMTE_TP|
+#           CMTE_DSGN|LINKAGE_ID
+
+def stream_candidate_committee_linkage(zip_path: str) -> Iterator[dict]:
+    """Yield one dict per candidate-committee linkage row."""
+    zf, text_stream = _open_txt_in_zip(zip_path)
+    try:
+        for line in text_stream:
+            parts = line.split("|")
+            if len(parts) < 6:
+                continue
+            yield {
+                "cand_id": _clean(parts[0]),
+                "cand_election_yr": _clean(parts[1]),
+                "cmte_id": _clean(parts[3]),
+                "cmte_type": _clean(parts[4]),
+                "cmte_designation": _clean(parts[5]),
+            }
+    finally:
+        zf.close()

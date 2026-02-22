@@ -1,14 +1,16 @@
 """
-Google Drive streaming service.
+Google Drive download service.
 
-Downloads files as byte-streams so we never hold an entire ZIP in RAM.
-Supports both service-account and pre-shared public links.
+Supports two credential methods:
+  1. GOOGLE_SERVICE_ACCOUNT_JSON env var (paste the full JSON — preferred on Render)
+  2. GOOGLE_SERVICE_ACCOUNT_FILE env var (path to a .json key file — local dev)
 """
 from __future__ import annotations
 
 import io
+import json
 import logging
-from typing import Iterator
+import os
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -19,43 +21,69 @@ import config
 logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
-
-# 64 KB download chunks — keeps memory flat.
 _DOWNLOAD_CHUNK = 64 * 1024
+
+
+def _get_credentials():
+    """Build credentials from env var JSON string or key file."""
+    if config.GOOGLE_SERVICE_ACCOUNT_JSON:
+        info = json.loads(config.GOOGLE_SERVICE_ACCOUNT_JSON)
+        return service_account.Credentials.from_service_account_info(
+            info, scopes=SCOPES
+        )
+    if config.GOOGLE_SERVICE_ACCOUNT_FILE:
+        return service_account.Credentials.from_service_account_file(
+            config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=SCOPES
+        )
+    raise RuntimeError(
+        "Set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SERVICE_ACCOUNT_FILE"
+    )
 
 
 def _get_drive_service():
     """Authenticate and return a Drive API service object."""
-    creds = service_account.Credentials.from_service_account_file(
-        config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=SCOPES
-    )
+    creds = _get_credentials()
     return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+def list_files(folder_id: str | None = None) -> list[dict]:
+    """Return metadata for every file in the target Drive folder."""
+    folder_id = folder_id or config.GOOGLE_DRIVE_FOLDER_ID
+    service = _get_drive_service()
+    query = f"'{folder_id}' in parents and trashed=false"
+
+    all_files = []
+    page_token = None
+
+    while True:
+        results = (
+            service.files()
+            .list(
+                q=query,
+                fields="nextPageToken, files(id, name, size, mimeType)",
+                pageSize=100,
+                pageToken=page_token,
+            )
+            .execute()
+        )
+        all_files.extend(results.get("files", []))
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            break
+
+    logger.info("Found %d files in Drive folder %s", len(all_files), folder_id)
+    return all_files
 
 
 def list_zip_files(folder_id: str | None = None) -> list[dict]:
     """Return metadata for every .zip file in the target Drive folder."""
-    folder_id = folder_id or config.GOOGLE_DRIVE_FOLDER_ID
-    service = _get_drive_service()
-    query = (
-        f"'{folder_id}' in parents "
-        "and mimeType='application/zip' "
-        "and trashed=false"
-    )
-    results = (
-        service.files()
-        .list(q=query, fields="files(id, name, size)", pageSize=100)
-        .execute()
-    )
-    return results.get("files", [])
+    all_files = list_files(folder_id)
+    return [f for f in all_files if f["name"].lower().endswith(".zip")]
 
 
-def stream_file_bytes(file_id: str) -> Iterator[bytes]:
-    """
-    Yield raw bytes of a Drive file in fixed-size chunks.
-
-    This is the core memory-safe primitive: the caller never holds
-    more than _DOWNLOAD_CHUNK bytes of the remote file at a time.
-    """
+def download_file(file_id: str, dest_path: str) -> str:
+    """Download a Drive file to a local path."""
+    os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
     service = _get_drive_service()
     request = service.files().get_media(fileId=file_id)
     buf = io.BytesIO()
@@ -64,25 +92,12 @@ def stream_file_bytes(file_id: str) -> Iterator[bytes]:
     done = False
     while not done:
         status, done = downloader.next_chunk()
-        buf.seek(0)
-        data = buf.read()
-        if data:
-            yield data
-        buf.seek(0)
-        buf.truncate()
+        if status:
+            logger.debug("Download %s: %d%%", file_id, int(status.progress() * 100))
 
-    logger.info("Finished streaming file %s", file_id)
-
-
-def download_file_to_tempfile(file_id: str, dest_path: str) -> str:
-    """
-    Stream a Drive file to a local temp path.
-
-    Used when we need seekable access (ZIP central directory requires it)
-    but still avoids loading the full file into a Python object.
-    """
+    buf.seek(0)
     with open(dest_path, "wb") as fh:
-        for chunk in stream_file_bytes(file_id):
-            fh.write(chunk)
+        fh.write(buf.read())
+
     logger.info("Downloaded %s → %s", file_id, dest_path)
     return dest_path

@@ -1,15 +1,12 @@
-# Render Blueprint — deploy Clawbot as a web service
+# Render Blueprint — deploy Clawbot as a static site
 services:
   - type: web
     name: clawbot
-    runtime: docker
-    plan: starter
+    runtime: static
+    buildCommand: bash build.sh
+    staticPublishPath: public
     envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: clawbot-db
-          property: connectionString
-      - key: GOOGLE_SERVICE_ACCOUNT_FILE
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
         sync: false
       - key: GOOGLE_DRIVE_FOLDER_ID
         sync: false
@@ -17,8 +14,5 @@ services:
         value: "2024"
       - key: FEC_CHUNK_SIZE
         value: "50000"
-
-databases:
-  - name: clawbot-db
-    plan: starter
-    databaseName: clawbot
+      - key: PYTHON_VERSION
+        value: "3.11.0"

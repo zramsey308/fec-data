@@ -1,15 +1,10 @@
 """
 Candidate → District mapping layer.
 
-Builds a lookup from *committee ID* (CMTE_ID) to a normalised district
-string like "TX-32" by joining:
-
-  committee  →  candidate (via CAND_PCC in the candidate master)
-  candidate  →  state + district
-
-The map is built once from the FEC candidate master file (cnYY.zip)
-streamed line-by-line so memory stays flat, then held as a plain dict
-for O(1) lookups during contribution ingestion.
+Builds lookups from committee IDs to normalised district strings like "TX-32"
+using both the candidate master (cnYY.zip) and candidate-committee linkage
+(ccnYY.zip) so we capture *all* committees associated with a candidate —
+not just the principal campaign committee.
 """
 from __future__ import annotations
 
@@ -17,44 +12,41 @@ import logging
 from typing import Iterable
 
 import config
-from ingestion.fec_stream import stream_candidate_master
+from ingestion.fec_stream import (
+    stream_candidate_committee_linkage,
+    stream_candidate_master,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def build_district_map(
     candidate_master_zip: str,
+    linkage_zip: str | None = None,
     monitored: set[str] | None = None,
 ) -> dict[str, str]:
     """
-    Return {cmte_id: "ST-DD"} for every principal campaign committee whose
-    candidate runs in one of the *monitored* districts.
+    Return {cmte_id: "ST-DD"} for every committee whose candidate
+    runs in one of the *monitored* districts.
 
-    Parameters
-    ----------
-    candidate_master_zip:
-        Path to the downloaded cnYY.zip file.
-    monitored:
-        Set of district strings to include (e.g. {"TX-32", "AL-01"}).
-        Defaults to config.MONITORED_DISTRICTS.
-
-    Returns
-    -------
-    dict mapping committee IDs to district labels.
+    Uses PCC from candidate master, plus all committees from the
+    candidate-committee linkage file if provided.
     """
     monitored = monitored or set(config.MONITORED_DISTRICTS)
     cmte_to_district: dict[str, str] = {}
+
+    # Map candidate IDs to districts
+    cand_to_district: dict[str, str] = {}
 
     for rec in stream_candidate_master(candidate_master_zip):
         state = rec["cand_office_st"]
         raw_dist = rec["cand_office_district"]
         pcc = rec["cand_pcc"]
+        cand_id = rec["cand_id"]
 
-        if not state or not raw_dist or not pcc:
+        if not state or not raw_dist:
             continue
 
-        # Normalise: FEC stores district as "02", we want "TX-02".
-        # At-large seats are stored as "00" — map to "ST-AL".
         if raw_dist == "00":
             district = f"{state}-AL"
         else:
@@ -63,7 +55,20 @@ def build_district_map(
         if district not in monitored:
             continue
 
-        cmte_to_district[pcc] = district
+        cand_to_district[cand_id] = district
+
+        # Always include the PCC
+        if pcc:
+            cmte_to_district[pcc] = district
+
+    # If we have the linkage file, add all linked committees
+    if linkage_zip:
+        for rec in stream_candidate_committee_linkage(linkage_zip):
+            cand_id = rec["cand_id"]
+            cmte_id = rec["cmte_id"]
+            district = cand_to_district.get(cand_id)
+            if district and cmte_id:
+                cmte_to_district[cmte_id] = district
 
     logger.info(
         "Built district map: %d committees across %d districts",
@@ -78,10 +83,8 @@ def filter_contributions(
     district_map: dict[str, str],
 ) -> list[tuple[str, dict]]:
     """
-    Given a chunk of ContributionRow dicts, return only those whose
-    CMTE_ID appears in the district map, tagged with the district.
-
-    Returns a list of (district, row) pairs.
+    Given a chunk of contribution/expenditure dicts, return only those whose
+    cmte_id appears in the district map, tagged with the district.
     """
     results = []
     for row in chunk:
