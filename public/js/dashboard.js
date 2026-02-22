@@ -144,9 +144,23 @@ async function init() {
   renderTable(rows);
 }
 
+// --- Column labels (used to reset header text before adding arrows) ---
+const COL_LABELS = {
+  district: "District",
+  cycle: "Cycle",
+  individual_donation_count: "Indiv. #",
+  individual_donation_total: "Indiv. $",
+  pac_donation_count: "PAC #",
+  pac_donation_total: "PAC $",
+  expenditure_count: "Exp. #",
+  expenditure_total: "Exp. $",
+  total_raised: "Total Raised",
+  net_cash_flow: "Net Cash",
+};
+
 // --- Sortable table ---
-let sortCol = "district";
-let sortAsc = true;
+let sortCol = "total_raised";
+let sortAsc = false;
 
 function renderTable(rows) {
   const tbody = document.querySelector("#summary-table tbody");
@@ -182,12 +196,17 @@ function renderTable(rows) {
     </tr>`;
   }).join("");
 
-  // Wire up sort on header clicks
+  // Update sort indicators on headers
   document.querySelectorAll("#summary-table th[data-col]").forEach(th => {
+    const col = th.dataset.col;
+    const label = COL_LABELS[col] || col;
+    const arrow = col === sortCol ? (sortAsc ? " \u25B2" : " \u25BC") : "";
+    th.textContent = label + arrow;
+    th.classList.toggle("sorted", col === sortCol);
+
     th.onclick = () => {
-      const col = th.dataset.col;
       if (sortCol === col) { sortAsc = !sortAsc; }
-      else { sortCol = col; sortAsc = true; }
+      else { sortCol = col; sortAsc = col === "district" || col === "cycle"; }
       renderTable(rows);
     };
   });
