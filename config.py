@@ -18,7 +18,8 @@ GOOGLE_DRIVE_FOLDER_ID: str = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "")
 
 # --- FEC processing ---
 CHUNK_SIZE: int = int(os.environ.get("FEC_CHUNK_SIZE", "50000"))
-DEFAULT_CYCLE: int = int(os.environ.get("FEC_CYCLE", "2024"))
+_raw_cycle = os.environ.get("FEC_CYCLE", "2024")
+DEFAULT_CYCLE: int = int(_raw_cycle.split(",")[0])
 
 # Multiple cycles to process — comma-separated years.
 # Each cycle corresponds to 2-digit file suffixes on Drive (e.g. indiv20.zip).
