@@ -10,19 +10,19 @@
 <body>
   <header>
     <h1>Clawbot — FEC District Dashboard</h1>
-    <p id="subtitle">Processed FEC bulk data filtered to monitored congressional districts.</p>
+    <p id="subtitle">Loading data…</p>
   </header>
 
   <main>
     <!-- Summary cards -->
     <section id="summary-cards" class="cards">
       <div class="card">
-        <span class="card-label">Districts Tracked</span>
-        <span class="card-value" id="card-districts">—</span>
+        <span class="card-label">Election Cycles</span>
+        <span class="card-value" id="card-cycles">—</span>
       </div>
       <div class="card">
-        <span class="card-label">Total Individual Donations</span>
-        <span class="card-value" id="card-indiv-count">—</span>
+        <span class="card-label">Districts Tracked</span>
+        <span class="card-value" id="card-districts">—</span>
       </div>
       <div class="card">
         <span class="card-label">Total Raised</span>
@@ -37,23 +37,24 @@
     <!-- Charts -->
     <section class="chart-row">
       <div class="chart-container">
-        <h2>Fundraising by District</h2>
+        <h2>Fundraising by District (stacked by cycle)</h2>
         <canvas id="raisedChart"></canvas>
       </div>
       <div class="chart-container">
-        <h2>Spending vs. Fundraising</h2>
-        <canvas id="spendChart"></canvas>
+        <h2>Fundraising Trend Across Cycles</h2>
+        <canvas id="trendChart"></canvas>
       </div>
     </section>
 
     <!-- District summary table -->
     <section>
-      <h2>District Summary</h2>
+      <h2>District Summary (per cycle)</h2>
       <div class="table-wrap">
         <table id="summary-table">
           <thead>
             <tr>
               <th data-col="district">District</th>
+              <th data-col="cycle">Cycle</th>
               <th data-col="individual_donation_count">Indiv. #</th>
               <th data-col="individual_donation_total">Indiv. $</th>
               <th data-col="pac_donation_count">PAC #</th>

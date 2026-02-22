@@ -1,4 +1,4 @@
-/* Clawbot Dashboard — reads CSV data and renders charts + table */
+/* Clawbot Dashboard — multi-cycle CSV data viewer */
 
 // --- CSV parser (no dependencies) ---
 function parseCSV(text) {
@@ -30,10 +30,24 @@ function commas(val) {
 }
 
 // --- Chart colors ---
+const CYCLE_COLORS = {
+  "2020": "#a78bfa",
+  "2022": "#fbbf24",
+  "2024": "#4f8cff",
+  "2026": "#34d399",
+};
 const COLORS = [
   "#4f8cff", "#34d399", "#fbbf24", "#f87171", "#a78bfa",
   "#fb923c", "#38bdf8", "#f472b6", "#818cf8", "#2dd4bf",
 ];
+
+const CHART_GRID = { color: "#2a2d3a" };
+const CHART_TICK = { color: "#8b8fa3" };
+function moneyAxis(v) {
+  if (Math.abs(v) >= 1e6) return "$" + (v / 1e6).toFixed(1) + "M";
+  if (Math.abs(v) >= 1e3) return "$" + (v / 1e3).toFixed(0) + "K";
+  return "$" + v;
+}
 
 // --- Load data and render ---
 async function init() {
@@ -44,7 +58,7 @@ async function init() {
     rows = parseCSV(await resp.text());
   } catch (e) {
     document.getElementById("subtitle").textContent =
-      "No data yet — the build pipeline has not run. Set your Google Drive env vars and redeploy.";
+      "No data yet \u2014 set your Google Drive env vars on Render and redeploy.";
     return;
   }
 
@@ -53,86 +67,75 @@ async function init() {
     return;
   }
 
-  // --- Summary cards ---
+  // --- Discover cycles and districts ---
+  const cycles = [...new Set(rows.map(r => r.cycle))].sort();
+  const districts = [...new Set(rows.map(r => r.district))].sort();
+
+  document.getElementById("subtitle").textContent =
+    `Cycles: ${cycles.join(", ")} \u2014 ${districts.length} districts tracked`;
+
+  // --- Summary cards (all cycles combined) ---
   const totalIndivCount = rows.reduce((s, r) => s + num(r.individual_donation_count), 0);
   const totalRaised = rows.reduce((s, r) => s + num(r.total_raised), 0);
   const totalSpent = rows.reduce((s, r) => s + num(r.expenditure_total), 0);
 
-  document.getElementById("card-districts").textContent = rows.length;
-  document.getElementById("card-indiv-count").textContent = commas(totalIndivCount);
+  document.getElementById("card-cycles").textContent = cycles.length;
+  document.getElementById("card-districts").textContent = districts.length;
   document.getElementById("card-raised").textContent = money(totalRaised);
   document.getElementById("card-spent").textContent = money(totalSpent);
 
-  // --- Fundraising bar chart ---
-  const labels = rows.map(r => r.district);
-  const indivData = rows.map(r => num(r.individual_donation_total));
-  const pacData = rows.map(r => num(r.pac_donation_total));
+  // --- Build lookup: rows by (district, cycle) ---
+  const lookup = {};
+  rows.forEach(r => { lookup[r.district + "|" + r.cycle] = r; });
+
+  // --- Fundraising by district, stacked by cycle ---
+  const datasets = cycles.map(cyc => ({
+    label: cyc,
+    data: districts.map(d => {
+      const r = lookup[d + "|" + cyc];
+      return r ? num(r.total_raised) : 0;
+    }),
+    backgroundColor: CYCLE_COLORS[cyc] || COLORS[cycles.indexOf(cyc) % COLORS.length],
+  }));
 
   new Chart(document.getElementById("raisedChart"), {
     type: "bar",
+    data: { labels: districts, datasets },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: "#8b8fa3" } } },
+      scales: {
+        x: { stacked: true, ticks: CHART_TICK, grid: CHART_GRID },
+        y: { stacked: true, ticks: { ...CHART_TICK, callback: moneyAxis }, grid: CHART_GRID },
+      },
+    },
+  });
+
+  // --- Trend chart: total raised per cycle across all districts ---
+  const cycleTotals = cycles.map(cyc =>
+    rows.filter(r => r.cycle === cyc).reduce((s, r) => s + num(r.total_raised), 0)
+  );
+
+  new Chart(document.getElementById("trendChart"), {
+    type: "line",
     data: {
-      labels,
-      datasets: [
-        { label: "Individual", data: indivData, backgroundColor: "#4f8cff" },
-        { label: "PAC", data: pacData, backgroundColor: "#34d399" },
-      ],
+      labels: cycles,
+      datasets: [{
+        label: "Total Raised (all districts)",
+        data: cycleTotals,
+        borderColor: "#4f8cff",
+        backgroundColor: "rgba(79, 140, 255, 0.15)",
+        fill: true,
+        tension: 0.3,
+        pointRadius: 6,
+      }],
     },
     options: {
       responsive: true,
       plugins: { legend: { labels: { color: "#8b8fa3" } } },
       scales: {
-        x: { stacked: true, ticks: { color: "#8b8fa3" }, grid: { color: "#2a2d3a" } },
-        y: {
-          stacked: true,
-          ticks: {
-            color: "#8b8fa3",
-            callback: v => "$" + (v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : (v / 1e3).toFixed(0) + "K"),
-          },
-          grid: { color: "#2a2d3a" },
-        },
-      },
-    },
-  });
-
-  // --- Spend vs raise scatter ---
-  new Chart(document.getElementById("spendChart"), {
-    type: "scatter",
-    data: {
-      datasets: [{
-        label: "Districts",
-        data: rows.map(r => ({
-          x: num(r.total_raised),
-          y: num(r.expenditure_total),
-          label: r.district,
-        })),
-        backgroundColor: rows.map((_, i) => COLORS[i % COLORS.length]),
-        pointRadius: 8,
-      }],
-    },
-    options: {
-      responsive: true,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: ctx => {
-              const pt = ctx.raw;
-              return `${pt.label}: Raised ${money(pt.x)}, Spent ${money(pt.y)}`;
-            },
-          },
-        },
-      },
-      scales: {
-        x: {
-          title: { display: true, text: "Total Raised", color: "#8b8fa3" },
-          ticks: { color: "#8b8fa3", callback: v => "$" + (v / 1e6).toFixed(1) + "M" },
-          grid: { color: "#2a2d3a" },
-        },
-        y: {
-          title: { display: true, text: "Total Spent", color: "#8b8fa3" },
-          ticks: { color: "#8b8fa3", callback: v => "$" + (v / 1e6).toFixed(1) + "M" },
-          grid: { color: "#2a2d3a" },
-        },
+        x: { ticks: CHART_TICK, grid: CHART_GRID },
+        y: { ticks: { ...CHART_TICK, callback: moneyAxis }, grid: CHART_GRID },
       },
     },
   });
@@ -148,14 +151,10 @@ let sortAsc = true;
 function renderTable(rows) {
   const tbody = document.querySelector("#summary-table tbody");
   const numCols = [
-    "individual_donation_count", "individual_donation_total",
+    "cycle", "individual_donation_count", "individual_donation_total",
     "pac_donation_count", "pac_donation_total",
     "expenditure_count", "expenditure_total",
     "total_raised", "net_cash_flow",
-  ];
-  const moneyCols = [
-    "individual_donation_total", "pac_donation_total",
-    "expenditure_total", "total_raised", "net_cash_flow",
   ];
 
   const sorted = [...rows].sort((a, b) => {
@@ -171,6 +170,7 @@ function renderTable(rows) {
     const netClass = net >= 0 ? "positive" : "negative";
     return `<tr>
       <td>${r.district}</td>
+      <td>${r.cycle}</td>
       <td>${commas(r.individual_donation_count)}</td>
       <td>${money(r.individual_donation_total)}</td>
       <td>${commas(r.pac_donation_count)}</td>

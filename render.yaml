@@ -10,6 +10,8 @@ services:
         sync: false
       - key: GOOGLE_DRIVE_FOLDER_ID
         sync: false
+      - key: FEC_CYCLES
+        value: "2020,2022,2024,2026"
       - key: FEC_CYCLE
         value: "2024"
       - key: FEC_CHUNK_SIZE
