@@ -81,6 +81,15 @@ def list_zip_files(folder_id: str | None = None) -> list[dict]:
     return [f for f in all_files if f["name"].lower().endswith(".zip")]
 
 
+def list_data_files(folder_id: str | None = None) -> list[dict]:
+    """Return metadata for every FEC data file (.zip or .txt) in the folder."""
+    all_files = list_files(folder_id)
+    return [
+        f for f in all_files
+        if f["name"].lower().endswith((".zip", ".txt"))
+    ]
+
+
 def download_file(file_id: str, dest_path: str) -> str:
     """Download a Drive file to a local path."""
     os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)

@@ -33,14 +33,24 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _open_txt_in_zip(zip_path: str):
-    """Open the first .txt file inside a ZIP and return a text stream."""
-    zf = zipfile.ZipFile(zip_path, "r")
-    names = zf.namelist()
-    txt_name = next((n for n in names if n.lower().endswith(".txt")), names[0])
-    logger.info("Streaming %s from %s", txt_name, zip_path)
-    raw = zf.open(txt_name)
-    text_stream = io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
-    return zf, text_stream
+    """Open the first .txt inside a ZIP, or a raw .txt file directly.
+
+    Returns (closeable, text_stream) where closeable.close() cleans up.
+    Works with both .zip archives and plain .txt files.
+    """
+    if zip_path.lower().endswith(".zip"):
+        zf = zipfile.ZipFile(zip_path, "r")
+        names = zf.namelist()
+        txt_name = next((n for n in names if n.lower().endswith(".txt")), names[0])
+        logger.info("Streaming %s from %s", txt_name, zip_path)
+        raw = zf.open(txt_name)
+        text_stream = io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
+        return zf, text_stream
+    else:
+        # Raw .txt file — wrap in an object with a .close() method
+        logger.info("Streaming raw file %s", zip_path)
+        fh = open(zip_path, "r", encoding="utf-8", errors="replace")
+        return fh, fh
 
 
 def _safe_decimal(raw: str) -> Decimal | None:
