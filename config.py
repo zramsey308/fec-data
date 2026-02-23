@@ -18,13 +18,12 @@ GOOGLE_DRIVE_FOLDER_ID: str = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "")
 
 # --- FEC processing ---
 CHUNK_SIZE: int = int(os.environ.get("FEC_CHUNK_SIZE", "50000"))
-DEFAULT_CYCLE: int = int(os.environ.get("FEC_CYCLE", "2024"))
 
-# Multiple cycles to process — comma-separated years.
+# Election cycles to process — comma-separated years.
+# Accepts FEC_CYCLES or FEC_CYCLE (either works with a comma-separated list).
 # Each cycle corresponds to 2-digit file suffixes on Drive (e.g. indiv20.zip).
-FEC_CYCLES: list[int] = [
-    int(y) for y in os.environ.get("FEC_CYCLES", "2020,2022,2024,2026").split(",")
-]
+_cycles_raw = os.environ.get("FEC_CYCLES") or os.environ.get("FEC_CYCLE") or "2020,2022,2024,2026"
+FEC_CYCLES: list[int] = [int(y.strip()) for y in _cycles_raw.split(",")]
 
 # --- Output ---
 # Build output directory for the static site

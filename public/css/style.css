@@ -138,6 +138,7 @@ th {
 }
 
 th:hover { color: var(--accent); }
+th.sorted { color: var(--accent); }
 
 tr:not(:last-child) td {
   border-bottom: 1px solid var(--border);
