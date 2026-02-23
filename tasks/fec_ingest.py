@@ -36,7 +36,7 @@ from ingestion.fec_stream import (
     stream_pac_contributions,
 )
 from ingestion.mapping import build_district_map, filter_contributions
-from services.drive import download_file, list_zip_files
+from services.drive import download_file, list_data_files
 
 logger = logging.getLogger(__name__)
 
@@ -64,25 +64,67 @@ def _suffix(cycle: int) -> str:
     return str(cycle)[-2:]
 
 
-def _find_zip_for_cycle(files: list[dict], prefix: str, cycle: int) -> dict | None:
-    """Find a ZIP matching prefix + 2-digit cycle suffix (e.g. 'cn' + '24')."""
+def _find_file_for_cycle(
+    files: list[dict], prefix: str, cycle: int, latest_cycle: int,
+) -> dict | None:
+    """Find a data file matching prefix + 2-digit cycle suffix.
+
+    Supports both .zip and .txt files.  Files *without* a year suffix
+    (e.g. ``cn.txt``) are matched to ``latest_cycle`` only.
+    """
     suffix = _suffix(cycle)
+    # First pass: look for files with the year suffix (e.g. cn24.zip, cn24.txt)
     for f in files:
         name = f["name"].lower()
-        if name.startswith(prefix) and suffix in name and name.endswith(".zip"):
+        stem = name.rsplit(".", 1)[0]  # e.g. "cn24"
+        if stem.startswith(prefix) and suffix in stem:
             return f
+    # Second pass: bare name without suffix (e.g. cn.txt) → latest cycle only
+    if cycle == latest_cycle:
+        for f in files:
+            name = f["name"].lower()
+            stem = name.rsplit(".", 1)[0]
+            if stem == prefix:
+                return f
     return None
 
 
-def _find_all_zips_for_cycle(files: list[dict], prefix: str, cycle: int) -> list[dict]:
-    """Find all ZIPs matching prefix + 2-digit cycle suffix."""
+def _find_all_files_for_cycle(
+    files: list[dict], prefix: str, cycle: int, latest_cycle: int,
+) -> list[dict]:
+    """Find all data files matching prefix + 2-digit cycle suffix.
+
+    Same bare-name fallback logic as ``_find_file_for_cycle``.
+    Also accepts alternate prefixes (e.g. itpas2.txt matches prefix 'pas').
+    """
     suffix = _suffix(cycle)
-    return [
-        f for f in files
-        if f["name"].lower().startswith(prefix)
-        and suffix in f["name"].lower()
-        and f["name"].lower().endswith(".zip")
-    ]
+    # Map well-known alternative file names to our canonical prefixes
+    alt_prefixes = {
+        "pas": ["pas", "itpas2"],
+        "oppexp": ["oppexp"],
+        "indiv": ["indiv", "itcont"],
+    }
+    prefixes = alt_prefixes.get(prefix, [prefix])
+
+    matched = []
+    for f in files:
+        name = f["name"].lower()
+        stem = name.rsplit(".", 1)[0]
+        for p in prefixes:
+            if stem.startswith(p) and suffix in stem:
+                matched.append(f)
+                break
+
+    # Bare name fallback for latest cycle
+    if not matched and cycle == latest_cycle:
+        for f in files:
+            name = f["name"].lower()
+            stem = name.rsplit(".", 1)[0]
+            for p in prefixes:
+                if stem == p:
+                    matched.append(f)
+                    break
+    return matched
 
 
 # ---------------------------------------------------------------------------
@@ -101,12 +143,13 @@ def run_ingest(
     folder_id = folder_id or config.GOOGLE_DRIVE_FOLDER_ID
 
     logger.info("Processing cycles: %s", cycles)
+    latest_cycle = max(cycles)
 
     # ── Discover all files on Drive once ──
-    all_zips = list_zip_files(folder_id)
-    logger.info("Found %d ZIP files on Drive", len(all_zips))
+    all_files = list_data_files(folder_id)
+    logger.info("Found %d data files on Drive", len(all_files))
 
-    for f in all_zips:
+    for f in all_files:
         logger.info("  Drive file: %s", f["name"])
 
     tmpdir = tempfile.mkdtemp(prefix="clawbot_")
@@ -153,10 +196,10 @@ def run_ingest(
             logger.info("═══ Processing cycle %d ═══", cycle)
 
             # ── 1. Build district map for this cycle ──
-            cn_zip = _find_zip_for_cycle(all_zips, "cn", cycle)
+            cn_zip = _find_file_for_cycle(all_files, "cn", cycle, latest_cycle)
             ccl_zip = (
-                _find_zip_for_cycle(all_zips, "ccl", cycle)
-                or _find_zip_for_cycle(all_zips, "ccn", cycle)
+                _find_file_for_cycle(all_files, "ccl", cycle, latest_cycle)
+                or _find_file_for_cycle(all_files, "ccn", cycle, latest_cycle)
             )
 
             if not cn_zip:
@@ -214,7 +257,7 @@ def run_ingest(
                 os.unlink(ccl_path)
 
             # ── 3. Write committees for this cycle ──
-            cm_zip = _find_zip_for_cycle(all_zips, "cm", cycle)
+            cm_zip = _find_file_for_cycle(all_files, "cm", cycle, latest_cycle)
             if cm_zip:
                 cm_path = os.path.join(tmpdir, cm_zip["name"])
                 download_file(cm_zip["id"], cm_path)
@@ -236,7 +279,7 @@ def run_ingest(
                 os.unlink(cm_path)
 
             # ── 4. Individual contributions ──
-            indiv_zips = _find_all_zips_for_cycle(all_zips, "indiv", cycle)
+            indiv_zips = _find_all_files_for_cycle(all_files, "indiv", cycle, latest_cycle)
             for fmeta in indiv_zips:
                 path = os.path.join(tmpdir, fmeta["name"])
                 download_file(fmeta["id"], path)
@@ -255,7 +298,7 @@ def run_ingest(
                 os.unlink(path)
 
             # ── 5. PAC contributions ──
-            pas_zips = _find_all_zips_for_cycle(all_zips, "pas", cycle)
+            pas_zips = _find_all_files_for_cycle(all_files, "pas", cycle, latest_cycle)
             for fmeta in pas_zips:
                 path = os.path.join(tmpdir, fmeta["name"])
                 download_file(fmeta["id"], path)
@@ -274,7 +317,7 @@ def run_ingest(
                 os.unlink(path)
 
             # ── 6. Expenditures ──
-            oppexp_zips = _find_all_zips_for_cycle(all_zips, "oppexp", cycle)
+            oppexp_zips = _find_all_files_for_cycle(all_files, "oppexp", cycle, latest_cycle)
             for fmeta in oppexp_zips:
                 path = os.path.join(tmpdir, fmeta["name"])
                 download_file(fmeta["id"], path)
